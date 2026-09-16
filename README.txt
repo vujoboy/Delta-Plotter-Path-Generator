@@ -4,7 +4,7 @@ The original GitHub page of the program is the following: https://github.com/vuj
 
 The design of this plotter can be bought here: https://www.printables.com/model/1843433-delta-plotter-with-auto-tool-chnager
 
-### Path Generator Software workflow ###
+### Delta Plotter Path Generator software workflow ###
 
 1) Select a project folder. If want to work on previously created drawing project select an existing project folder. If you want to start a new project instead create a new project folder. In this folder an XML save file will be created.
 
