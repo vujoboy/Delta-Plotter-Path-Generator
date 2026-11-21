@@ -4,7 +4,7 @@ SVG tracing utilities.
 Turns an arbitrary input SVG (paths, rects, circles, ellipses, polygons,
 polylines, lines - including nested <g> transforms) into a flat list of
 polylines that the rest of the pipeline can treat exactly like the
-skeletonized-lines / lawnmower / AM-fill polyline outputs.
+lawnmower / AM-fill polyline outputs.
 
 Curves (cubic/quadratic beziers, arcs) are flattened to short straight
 segments based on their arc length, so curve quality is controlled by a

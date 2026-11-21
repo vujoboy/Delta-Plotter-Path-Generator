@@ -36,9 +36,6 @@ def layer_from_xml(layer_el: ET.Element) -> LayerDetails:
     if (v := get_value(layer_el, "enabled", parse_bool)) is not None:
         layer.enabled = v
 
-    if (v := get_value(layer_el, "canvas_scaling", float)) is not None:
-        layer.canvas_scaling = v
-
     # --- visualisation ---
     vis = layer_el.find("visualisation")
     if vis is not None:
@@ -123,12 +120,6 @@ def layer_from_xml(layer_el: ET.Element) -> LayerDetails:
         if (v := get_value(billiard, "seed", int)) is not None:
             layer.billiard_seed = v
 
-    # --- Spiral fill ---
-    spiral = layer_el.find("spiral_fill")
-    if spiral is not None:
-        if (v := get_value(spiral, "offset_step", float)) is not None:
-            layer.spiral_offset_step = v
-
     # --- AM spiral fill ---
     am_spiral = layer_el.find("am_spiral_fill")
     if am_spiral is not None:
@@ -184,3 +175,21 @@ def load_layers_from_xml(path: str) -> list[LayerDetails]:
         layers.append(layer_from_xml(layer_el))
 
     return layers
+
+def load_canvas_scaling_from_xml(path: str) -> float:
+    """
+    Canvas scaling (% of the canvas height the source image/SVG is scaled to
+    fill) is one project-wide setting stored once, directly under the root
+    element - it applies to every layer.
+
+    Project files saved by older versions stored it per layer instead; for
+    those, the first layer's value is used.
+    """
+    root = ET.parse(path).getroot()
+    if (v := get_value(root, "canvas_scaling", float)) is not None:
+        return v
+    first_layer = root.find("layer")
+    if first_layer is not None:
+        if (v := get_value(first_layer, "canvas_scaling", float)) is not None:
+            return v
+    return 100.0

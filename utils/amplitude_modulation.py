@@ -51,15 +51,15 @@ def sample_line_brightness(img, start, end, sampling_density):
 
     samples = np.array([sample_bilinear(x, y) for x, y in zip(xs, ys)])
 
-    # Invert brightness
+    # Invert brightness: white (255) -> 0, black (0) -> 255.
     samples = 255 - samples
 
-    # Normalize 0–1
-    mn, mx = samples.min(), samples.max()
-    if mx - mn == 0:
-        return np.zeros_like(samples)
-
-    return (samples - mn) / (mx - mn)
+    # Absolute darkness envelope on a fixed 0..255 scale - NOT this line's
+    # own min/max. Normalizing per-line stretched even a perfectly blank
+    # line's tiny sampling noise into a full 0..1 swing, which produced
+    # spurious full-amplitude waves on lines that never actually crossed
+    # anything dark.
+    return np.clip(samples / 255.0, 0.0, 1.0)
 
 
 # ---------------------------------------------------------
@@ -111,12 +111,13 @@ def create_am_polyline(
     phase = kx * xs + ky * ys
     carrier = np.sin(2 * np.pi * phase)
 
-    # AM modulation
-    am_signal = carrier * envelope
-
-    # Normalize amplitude
-    denom = np.max(np.abs(am_signal)) or 1
-    am_signal = am_signal / denom * amplitude
+    # AM modulation. carrier is bounded to [-1, 1] and envelope is an
+    # absolute darkness value bounded to [0, 1] (not renormalized per
+    # line), so the product is already bounded to [-1, 1] - scaling
+    # directly by `amplitude` keeps faint/near-white areas faint instead
+    # of forcing every line's peak up to the full configured amplitude
+    # regardless of how much actual darkness it contains.
+    am_signal = carrier * envelope * amplitude
 
     # ---------------------------------------------------------
     # Offset perpendicular to line

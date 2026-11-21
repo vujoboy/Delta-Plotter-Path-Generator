@@ -9,7 +9,6 @@ import config
 
 PATH_MODES = [
     "simple contour",
-    "skeletonized lines",
     "inward offset fill",
     "lawnmover fill",
     "AM fill full canvas",
@@ -17,21 +16,21 @@ PATH_MODES = [
     "trace SVG",
     "foam voronoi cells",
     "billiard bounce fill",
-    "spiral fill",
     "AM spiral fill full canvas",
     "AM spiral fill inside contours",
     "dot fill full canvas",
     "dot fill inside contours",
-    "TSP art full canvas",
     "TSP art inside contours"
 ]
+
+# Path generation modes that no longer exist (see _migrate_legacy_xml()).
+REMOVED_PATH_MODES = {"skeletonized lines", "spiral fill", "TSP art full canvas"}
 
 # Which mode-specific control frame(s) (see _mode_frame()) apply to each
 # path generation mode. Modes not listed here (or mapped to an empty list)
 # have no extra parameters beyond General / Visualisation / Polygon controls.
 MODE_SECTION_KEYS = {
     config.mode_simple_contour: [],
-    config.mode_skeletonized_lines: [],
     config.mode_inward_offset_fill: ["inward_offset"],
     config.mode_lawnmover_fill: ["lawnmower"],
     config.mode_AM_fill_full_canvas: ["am_fill"],
@@ -39,12 +38,10 @@ MODE_SECTION_KEYS = {
     config.mode_trace_svg: ["svg_trace"],
     config.mode_foam_voronoi: ["foam_voronoi"],
     config.mode_billiard_fill: ["billiard_fill"],
-    config.mode_spiral_fill: ["spiral_fill"],
     config.mode_AM_spiral_fill_full_canvas: ["am_spiral_fill"],
     config.mode_AM_spiral_fill_inside_contours: ["am_spiral_fill"],
     config.mode_dot_fill_full_canvas: ["dot_fill"],
     config.mode_dot_fill_inside_contours: ["dot_fill"],
-    config.mode_tsp_art_full_canvas: ["tsp_art"],
     config.mode_tsp_art_inside_contours: ["tsp_art"],
 }
 
@@ -63,6 +60,7 @@ class LayerEditor:
 
         self.tree = ET.parse(self.xml_path)
         self.root_elem = self.tree.getroot()
+        self._migrate_legacy_xml()
         self.layers = self.root_elem.findall("layer")
 
         if not self.layers:
@@ -77,6 +75,7 @@ class LayerEditor:
 
         self.project_folder = tk.StringVar(value=os.getcwd())
         self._build_ui(figSource, figPreview)
+        self._load_canvas_scaling()
         self.load_layer(0)
 
     # ---------------------------------------------------------
@@ -234,7 +233,7 @@ class LayerEditor:
         self.canvas_source = FigureCanvasTkAgg(self.fig_source, master=sourcePreview)
         self.canvas_source.get_tk_widget().grid(row=0, column=0, columnspan=2, sticky="nsew")
 
-        ttk.Label(sourcePreview, text="Canvas scaling (%)")\
+        ttk.Label(sourcePreview, text="Canvas scaling % (all layers)")\
             .grid(row=1, column=0, sticky="w", pady=(6, 0))
         self.canvas_scaling = ttk.Entry(sourcePreview, width=8)
         self.canvas_scaling.grid(row=1, column=1, sticky="w", pady=(6, 0), padx=(6, 0))
@@ -264,7 +263,7 @@ class LayerEditor:
         ttk.Label(controls, text="Path generation mode")\
             .grid(row=r, column=0, sticky="w")
         self.path_mode = ttk.Combobox(
-            controls, values=PATH_MODES, state="readonly"
+            controls, values=PATH_MODES, state="readonly", height=len(PATH_MODES)+1
         )
         self.path_mode.grid(row=r, column=1, sticky="ew", padx=(6, 0))
         self.path_mode.bind("<<ComboboxSelected>>", self._on_path_mode_changed)
@@ -325,9 +324,6 @@ class LayerEditor:
         self.billiard_coverage_bias, rr = self._entry(f, "Coverage bias (0-1)", rr)
         self.billiard_coverage_grid_resolution, rr = self._entry(f, "Coverage grid resolution", rr)
         self.billiard_seed, rr = self._entry(f, "Seed (<=0 = random)", rr)
-
-        f, rr = self._mode_frame(mode_container, "spiral_fill", "Spiral Fill")
-        self.spiral_offset_step, rr = self._entry(f, "Offset step", rr)
 
         f, rr = self._mode_frame(mode_container, "am_spiral_fill", "AM Spiral Fill")
         self.am_spiral_pitch, rr = self._entry(f, "Pitch", rr)
@@ -436,9 +432,6 @@ class LayerEditor:
         self.feed_rate.delete(0, tk.END)
         self.feed_rate.insert(0, layer.findtext("layer_feed_rate", "0"))
 
-        self.canvas_scaling.delete(0, tk.END)
-        self.canvas_scaling.insert(0, layer.findtext("canvas_scaling", "100"))
-
         vis = layer.find("visualisation")
         self.line_color.delete(0, tk.END)
         self.line_color.insert(0, vis.findtext("line_color", "0,0,0"))
@@ -524,13 +517,6 @@ class LayerEditor:
             self.billiard_coverage_grid_resolution.insert(0, "40")
             self.billiard_seed.insert(0, "42")
 
-        spiral = layer.find("spiral_fill")
-        self.spiral_offset_step.delete(0, tk.END)
-        if spiral is not None:
-            self.spiral_offset_step.insert(0, spiral.findtext("offset_step", "6.0"))
-        else:
-            self.spiral_offset_step.insert(0, "6.0")
-
         am_spiral = layer.find("am_spiral_fill")
         self.am_spiral_pitch.delete(0, tk.END)
         self.am_spiral_step_size.delete(0, tk.END)
@@ -592,6 +578,10 @@ class LayerEditor:
             self.tsp_seed.insert(0, "42")
 
     def save_layer(self):
+        # Canvas scaling is project-wide (not per layer) - keep it in sync
+        # no matter which layer is currently being edited.
+        self._save_canvas_scaling()
+
         if not self.layers:
             return
         layer = self.layers[self.current_layer]
@@ -605,11 +595,6 @@ class LayerEditor:
         if enabled_el is None:
             enabled_el = ET.SubElement(layer, "enabled")
         enabled_el.text = "true" if self.layer_enabled.get() else "false"
-
-        canvas_scaling_el = layer.find("canvas_scaling")
-        if canvas_scaling_el is None:
-            canvas_scaling_el = ET.SubElement(layer, "canvas_scaling")
-        canvas_scaling_el.text = self.canvas_scaling.get()
 
         vis = layer.find("visualisation")
         vis.find("line_color").text = self.line_color.get()
@@ -670,12 +655,6 @@ class LayerEditor:
         billiard.find("coverage_grid_resolution").text = self.billiard_coverage_grid_resolution.get()
         billiard.find("seed").text = self.billiard_seed.get()
 
-        spiral = layer.find("spiral_fill")
-        if spiral is None:
-            spiral = ET.SubElement(layer, "spiral_fill")
-            ET.SubElement(spiral, "offset_step")
-        spiral.find("offset_step").text = self.spiral_offset_step.get()
-
         am_spiral = layer.find("am_spiral_fill")
         if am_spiral is None:
             am_spiral = ET.SubElement(layer, "am_spiral_fill")
@@ -720,6 +699,58 @@ class LayerEditor:
         tsp.find("opt_passes").text = self.tsp_opt_passes.get()
         tsp.find("seed").text = self.tsp_seed.get()
 
+    # ---------------------------------------------------------
+    # Canvas scaling - one project-wide value, stored once as a direct
+    # child of the root element (<layers><canvas_scaling>100</canvas_scaling>
+    # <layer>...</layer>...</layers>) and shared by every layer.
+    # ---------------------------------------------------------
+    def _migrate_legacy_xml(self):
+        """
+        Bring a project file written by an older version up to date:
+        - canvas scaling used to be stored in every <layer>; it now lives
+          once under the root. The first layer's old value (if any) becomes
+          the project-wide value and the per-layer copies are dropped.
+        - drop the leftover <spiral_fill> settings of the removed
+          "spiral fill" path generation mode.
+        - a layer still set to a removed path generation mode ("skeletonized
+          lines", "spiral fill", "TSP art full canvas") falls back to
+          "simple contour" instead of silently drawing nothing.
+        """
+        layers = self.root_elem.findall("layer")
+
+        if self.root_elem.find("canvas_scaling") is None:
+            value = "100"
+            for layer in layers:
+                old = layer.find("canvas_scaling")
+                if old is not None and old.text and old.text.strip():
+                    value = old.text.strip()
+                    break
+            el = ET.Element("canvas_scaling")
+            el.text = value
+            self.root_elem.insert(0, el)
+
+        for layer in layers:
+            for tag in ("canvas_scaling", "spiral_fill"):
+                for el in layer.findall(tag):
+                    layer.remove(el)
+
+            mode_el = layer.find("path_generation_mode")
+            if mode_el is not None and mode_el.text in REMOVED_PATH_MODES:
+                mode_el.text = PATH_MODES[0]
+
+    def _load_canvas_scaling(self):
+        """Show the project-wide canvas scaling value in the entry box."""
+        self.canvas_scaling.delete(0, tk.END)
+        self.canvas_scaling.insert(0, self.root_elem.findtext("canvas_scaling", "100"))
+
+    def _save_canvas_scaling(self):
+        """Write the entry box's value to the single project-wide element."""
+        el = self.root_elem.find("canvas_scaling")
+        if el is None:
+            el = ET.Element("canvas_scaling")
+            self.root_elem.insert(0, el)
+        el.text = self.canvas_scaling.get()
+
     def _new_default_layer_element(self):
         """Build a single <layer> element with sensible default values."""
         new_layer = ET.Element("layer")
@@ -728,7 +759,6 @@ class LayerEditor:
         ET.SubElement(new_layer, "pen_number").text = "0"
         ET.SubElement(new_layer, "layer_feed_rate").text = "6000"
         ET.SubElement(new_layer, "enabled").text = "true"
-        ET.SubElement(new_layer, "canvas_scaling").text = "100"
 
         vis = ET.SubElement(new_layer, "visualisation")
         ET.SubElement(vis, "line_color").text = "0,0,0"
@@ -772,9 +802,6 @@ class LayerEditor:
         ET.SubElement(billiard, "coverage_grid_resolution").text = "40"
         ET.SubElement(billiard, "seed").text = "42"
 
-        spiral = ET.SubElement(new_layer, "spiral_fill")
-        ET.SubElement(spiral, "offset_step").text = "6.0"
-
         am_spiral = ET.SubElement(new_layer, "am_spiral_fill")
         ET.SubElement(am_spiral, "pitch").text = "12.0"
         ET.SubElement(am_spiral, "step_size").text = "0.2"
@@ -802,6 +829,7 @@ class LayerEditor:
     def _create_default_xml(self, path):
         """Write a minimal valid input_parameters.xml (one default layer) to path."""
         root_elem = ET.Element("layers")
+        ET.SubElement(root_elem, "canvas_scaling").text = "100"
         root_elem.append(self._new_default_layer_element())
         ET.ElementTree(root_elem).write(path)
 
@@ -893,6 +921,7 @@ class LayerEditor:
             return
 
         self.root_elem = self.tree.getroot()
+        self._migrate_legacy_xml()
         self.layers = self.root_elem.findall("layer")
 
         if not self.layers:
@@ -903,6 +932,7 @@ class LayerEditor:
         self.layer_select["values"] = list(range(1, len(self.layers) + 1))
         self.current_layer = 0
         self.layer_select.current(0)
+        self._load_canvas_scaling()
         self.load_layer(0)
         self.update_preview()
 

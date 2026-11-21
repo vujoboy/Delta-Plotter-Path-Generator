@@ -315,34 +315,6 @@ def _build_and_improve_tour(points, k_neighbors, max_passes, seed):
 # Public entry points
 # ---------------------------------------------------------------------
 
-def generate_tsp_art(img, num_points, darkness_bias=1.0, k_neighbors=8, opt_passes=6,
-                      seed=None, max_edge_len=None):
-    """
-    Generate TSP art for the whole image canvas.
-
-    Returns a list containing a single polyline - the whole tour, one
-    continuous stroke from its first stipple point to its last.
-    """
-    h, w = img.shape[:2]
-    if num_points <= 1 or w <= 0 or h <= 0:
-        return []
-
-    img_gray = _to_gray(img)
-
-    def contains_fn(x, y):
-        return True
-
-    points = _weighted_poisson_disk_sample(img_gray, contains_fn, (0, 0, w, h), num_points, darkness_bias, seed=seed)
-    if len(points) < 2:
-        return []
-
-    polyline = _build_and_improve_tour(points, k_neighbors, opt_passes, seed)
-    if max_edge_len:
-        polyline = subdivide_line(polyline, max_edge_len)
-
-    return [polyline]
-
-
 def generate_tsp_art_inside_contours(img, num_points, polygons, darkness_bias=1.0, k_neighbors=8,
                                       opt_passes=6, seed=None, max_edge_len=None):
     """

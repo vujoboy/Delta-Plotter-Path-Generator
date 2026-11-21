@@ -56,10 +56,12 @@ def _sample_brightness(img_gray, xs, ys):
     )
 
     samples = 255.0 - samples  # invert: dark image areas -> strong signal
-    mn, mx = samples.min(), samples.max()
-    if mx - mn < 1e-9:
-        return np.zeros_like(samples)
-    return (samples - mn) / (mx - mn)
+    # Absolute darkness envelope on a fixed 0..255 scale - NOT this
+    # spiral's own min/max. Normalizing per-batch stretched even a
+    # perfectly blank stretch's tiny sampling noise into a full 0..1
+    # swing, producing spurious full-amplitude wobble in areas with no
+    # real darkness.
+    return np.clip(samples / 255.0, 0.0, 1.0)
 
 
 def _archimedean_spiral_points(center, pitch, max_radius, sampling_density):
@@ -119,9 +121,12 @@ def create_am_spiral_polyline(img, center, pitch, max_radius, sampling_density,
     arc_len = np.concatenate([[0.0], np.cumsum(seg_len)])
 
     carrier = np.sin(2 * np.pi * cyc_per_pix * arc_len)
-    am_signal = carrier * envelope
-    denom = np.max(np.abs(am_signal)) or 1
-    am_signal = am_signal / denom * amplitude
+    # carrier is bounded to [-1, 1] and envelope is an absolute darkness
+    # value bounded to [0, 1] (not renormalized per spiral), so scaling
+    # directly by `amplitude` keeps faint/near-white stretches faint
+    # instead of forcing the spiral's peak up to the full configured
+    # amplitude regardless of how much actual darkness it contains.
+    am_signal = carrier * envelope * amplitude
 
     # Local perpendicular (normal) direction at each sample, from the
     # spiral's own local tangent (central differences).
