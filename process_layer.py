@@ -8,13 +8,11 @@ import cv2
 from utils.gcode_handling import write_poligons_to_gcode, write_linepath_to_gcode, start_layer_in_gcode, end_layer_in_gcode
 from utils.amplitude_modulation import generate_all_am_polylines, crop_lines_with_polygons
 from utils.lawnmower_fill import break_long_edges, lawnmower_fill, generate_offsets, subdivide_line
-from utils.skeletonize_lines import extract_centerline_polylines
 from utils.foam_fill import generate_foam_voronoi_fill
 from utils.billiard_fill import generate_billiard_fill
-from utils.spiral_fill import generate_spiral_fill
 from utils.am_spiral import generate_am_spiral_polyline
 from utils.dot_fill import generate_dot_fill, generate_dot_fill_inside_contours
-from utils.tsp_art import generate_tsp_art, generate_tsp_art_inside_contours
+from utils.tsp_art import generate_tsp_art_inside_contours
 from dataclasses import dataclass
 from typing import List, Tuple
 from models.layer_details import LayerDetails
@@ -30,26 +28,26 @@ Polyline = List[Point]
 @dataclass
 class PlotData:
     polygons: List[Polygon] = None
-    skeletons: List[Polyline] = None
     offsets: List[Polygon] = None
     lawnmower_paths: List[List[Tuple[float, float]]] = None
     am_linestrings: List[LineString] = None
     svg_lines: List[Polyline] = None
     foam_edges: List[Polyline] = None
     billiard_paths: List[Polyline] = None
-    spiral_paths: List[Polyline] = None
     am_spiral_lines: List[Polyline] = None
     dot_lines: List[Polyline] = None
     tsp_art_lines: List[Polyline] = None
 
-def process_layer(layerData: LayerDetails):
+def process_layer(layerData: LayerDetails, canvas_scaling: float = 100.0):
+    """
+    canvas_scaling: % of the canvas height the source image/SVG is scaled to
+    fill (see config.DRWAING_AREA_HEIGHT). It is one project-wide setting,
+    shared by every layer, so the caller passes it in rather than it being
+    read from the layer.
+    """
 
 
     path_generation_mode = layerData.path_generation_mode #setting defeult for startup
-
-    # Canvas scaling: % of the canvas height the source image/SVG should
-    # be scaled to fill (see config.DRWAING_AREA_HEIGHT).
-    canvas_scaling = layerData.canvas_scaling
 
     # Poligon controls
     minShellPoints = layerData.min_shell_points
@@ -89,9 +87,6 @@ def process_layer(layerData: LayerDetails):
     billiard_coverage_grid_resolution = layerData.billiard_coverage_grid_resolution
     billiard_seed = layerData.billiard_seed
 
-    # Spiral fill control parameters
-    spiral_offset_step = layerData.spiral_offset_step
-
     # AM spiral fill control parameters
     am_spiral_pitch = layerData.am_spiral_pitch
     am_spiral_step_size = layerData.am_spiral_step_size
@@ -121,14 +116,12 @@ def process_layer(layerData: LayerDetails):
     # Prepare plot data payload
     plot_data = PlotData(
         polygons=[],
-        skeletons=[],
         offsets=[],
         lawnmower_paths=[],
         am_linestrings=[],
         svg_lines=[],
         foam_edges=[],
         billiard_paths=[],
-        spiral_paths=[],
         am_spiral_lines=[],
         dot_lines=[],
         tsp_art_lines=[]
@@ -314,7 +307,7 @@ def process_layer(layerData: LayerDetails):
 
     # NOTE: contours are intentionally NOT drawn onto `img` here - `img` is
     # the same array every raster-sampling fill mode (AM fill, AM spiral
-    # fill, dot fill, TSP art, skeletonize) reads pixel brightness from
+    # fill, dot fill, TSP art) reads pixel brightness from
     # afterward. Burning contour outlines into it first used to leave a
     # dark red seam wherever a contour was found - including internal
     # contours like a highlight's boundary in the middle of an otherwise
@@ -415,21 +408,6 @@ def process_layer(layerData: LayerDetails):
                 for p in paths:
                     write_linepath_to_gcode(p, h)
 
-    # --> Skeletonized lines
-    if path_generation_mode == config.mode_skeletonized_lines:
-        # Generate skeletonized lines
-
-        skeleton_polylines = extract_centerline_polylines(img)
-
-        # Plot skeletons
-        #for paths in skeleton_polylines:
-        #    plot_data.skeletons.extend(paths)
-        plot_data.skeletons.extend(skeleton_polylines)
-
-        # Write them to G-code:
-        for line in skeleton_polylines:
-            write_linepath_to_gcode(line, h)
-
     # --> AM fill
     if path_generation_mode == config.mode_AM_fill_full_canvas or path_generation_mode == config.mode_AM_fill_inside_contours:
         am_polylines = []
@@ -514,28 +492,6 @@ def process_layer(layerData: LayerDetails):
         for path in all_billiard_paths:
             write_linepath_to_gcode(path, h)
 
-    # --> Spiral fill
-    if path_generation_mode == config.mode_spiral_fill:
-        all_spiral_paths = []
-
-        for poly in polygons:
-            polys = [poly] if poly.geom_type == "Polygon" else list(poly.geoms)
-            for p in polys:
-                paths = generate_spiral_fill(
-                    p,
-                    offset_step=spiral_offset_step,
-                    max_edge_len=max_edge_len,
-                )
-                all_spiral_paths.extend(paths)
-
-        print(f"Generated {len(all_spiral_paths)} spiral(s)")
-
-        plot_data.spiral_paths.extend(all_spiral_paths)
-
-        # Write spiral strokes to gcode
-        for path in all_spiral_paths:
-            write_linepath_to_gcode(path, h)
-
     # --> AM spiral fill
     if path_generation_mode == config.mode_AM_spiral_fill_full_canvas \
             or path_generation_mode == config.mode_AM_spiral_fill_inside_contours:
@@ -590,23 +546,14 @@ def process_layer(layerData: LayerDetails):
         for line in dot_lines:
             write_linepath_to_gcode(line, h)
 
-    # --> TSP art
-    if path_generation_mode == config.mode_tsp_art_full_canvas \
-            or path_generation_mode == config.mode_tsp_art_inside_contours:
-        if path_generation_mode == config.mode_tsp_art_inside_contours:
-            tsp_art_lines = generate_tsp_art_inside_contours(
-                img, num_points=tsp_num_points, polygons=polygons,
-                darkness_bias=tsp_darkness_bias, k_neighbors=tsp_k_neighbors,
-                opt_passes=tsp_opt_passes, seed=(tsp_seed if tsp_seed and tsp_seed > 0 else None),
-                max_edge_len=max_edge_len,
-            )
-        else:
-            tsp_art_lines = generate_tsp_art(
-                img, num_points=tsp_num_points,
-                darkness_bias=tsp_darkness_bias, k_neighbors=tsp_k_neighbors,
-                opt_passes=tsp_opt_passes, seed=(tsp_seed if tsp_seed and tsp_seed > 0 else None),
-                max_edge_len=max_edge_len,
-            )
+    # --> TSP art (inside contours)
+    if path_generation_mode == config.mode_tsp_art_inside_contours:
+        tsp_art_lines = generate_tsp_art_inside_contours(
+            img, num_points=tsp_num_points, polygons=polygons,
+            darkness_bias=tsp_darkness_bias, k_neighbors=tsp_k_neighbors,
+            opt_passes=tsp_opt_passes, seed=(tsp_seed if tsp_seed and tsp_seed > 0 else None),
+            max_edge_len=max_edge_len,
+        )
 
         print(f"Generated {len(tsp_art_lines)} TSP art tour(s)")
 
