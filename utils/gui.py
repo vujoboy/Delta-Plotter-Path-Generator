@@ -17,7 +17,7 @@ PATH_MODES = [
     "foam voronoi cells",
     "billiard bounce fill",
     "AM spiral fill full canvas",
-    "AM spiral fill inside contours",
+    "AM spiral fill in contours",
     "dot fill full canvas",
     "dot fill inside contours",
     "TSP art inside contours"
@@ -233,7 +233,7 @@ class LayerEditor:
         self.canvas_source = FigureCanvasTkAgg(self.fig_source, master=sourcePreview)
         self.canvas_source.get_tk_widget().grid(row=0, column=0, columnspan=2, sticky="nsew")
 
-        ttk.Label(sourcePreview, text="Canvas scaling (%, all layers)")\
+        ttk.Label(sourcePreview, text="Canvas scaling % (all layers)")\
             .grid(row=1, column=0, sticky="w", pady=(6, 0))
         self.canvas_scaling = ttk.Entry(sourcePreview, width=8)
         self.canvas_scaling.grid(row=1, column=1, sticky="w", pady=(6, 0), padx=(6, 0))
@@ -263,7 +263,7 @@ class LayerEditor:
         ttk.Label(controls, text="Path generation mode")\
             .grid(row=r, column=0, sticky="w")
         self.path_mode = ttk.Combobox(
-            controls, values=PATH_MODES, state="readonly"
+            controls, values=PATH_MODES, state="readonly", height=len(PATH_MODES)+1
         )
         self.path_mode.grid(row=r, column=1, sticky="ew", padx=(6, 0))
         self.path_mode.bind("<<ComboboxSelected>>", self._on_path_mode_changed)
