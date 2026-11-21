@@ -18,7 +18,7 @@ import random
 import numpy as np
 import cv2
 from scipy.spatial import cKDTree
-from shapely.geometry import Point
+from shapely.geometry import Point, LineString
 from shapely.prepared import prep
 from shapely.ops import unary_union
 
@@ -312,6 +312,72 @@ def _build_and_improve_tour(points, k_neighbors, max_passes, seed):
 
 
 # ---------------------------------------------------------------------
+# 4. Splitting the tour at jumps (so they become pen-up travel moves)
+# ---------------------------------------------------------------------
+
+# A tour edge is treated as a jump - not something to draw - when it is longer
+# than this many times the local point spacing (see _split_tour_at_jumps()).
+JUMP_SPACING_FACTOR = 2.5
+# "Local point spacing" at a point = distance to its Nth-nearest neighbor.
+JUMP_SPACING_NEIGHBOR = 6
+# Tolerance (px) when testing whether an edge stays inside the shape, so edges
+# that merely graze the outline between two boundary points aren't cut.
+JUMP_INSIDE_TOLERANCE = 1.0
+
+
+def _split_tour_at_jumps(tour_points, inside_region=None):
+    """
+    Split a tour (a list of points visited in order) into separate strokes
+    wherever a tour edge is a jump rather than part of the drawing.
+
+    A nearest-neighbor tour inevitably runs out of unvisited points nearby
+    now and then and has to leap to a far-away leftover point; 2-opt only
+    partly repairs that. Left as-is those leaps get drawn as long straight
+    lines. Cutting the tour there makes each leap a pen-up travel move
+    instead (each returned polyline is drawn pen-down to pen-up).
+
+    An edge is cut when:
+      - it is much longer than the local point spacing (a leap), or
+      - `inside_region` is given and the edge leaves it (e.g. cuts across
+        empty space between two lobes of a concave contour).
+
+    Returns a list of polylines, each with at least 2 points.
+    """
+    n = len(tour_points)
+    if n < 2:
+        return []
+
+    pts = np.asarray(tour_points, dtype=float)
+
+    # Local spacing at each point: distance to its Nth-nearest neighbor.
+    k = min(JUMP_SPACING_NEIGHBOR + 1, n)   # +1: the nearest "neighbor" is the point itself
+    dists, _ = cKDTree(pts).query(pts, k=k)
+    local_spacing = np.atleast_2d(dists)[:, -1] if k > 1 else np.zeros(n)
+
+    strokes = []
+    current = [tuple(pts[0])]
+    for i in range(n - 1):
+        a, b = pts[i], pts[i + 1]
+        edge_len = float(np.hypot(b[0] - a[0], b[1] - a[1]))
+        limit = JUMP_SPACING_FACTOR * max(local_spacing[i], local_spacing[i + 1])
+
+        is_jump = edge_len > limit
+        if not is_jump and inside_region is not None:
+            is_jump = not inside_region.covers(LineString([tuple(a), tuple(b)]))
+
+        if is_jump:
+            if len(current) >= 2:
+                strokes.append(current)
+            current = [tuple(b)]
+        else:
+            current.append(tuple(b))
+
+    if len(current) >= 2:
+        strokes.append(current)
+    return strokes
+
+
+# ---------------------------------------------------------------------
 # Public entry points
 # ---------------------------------------------------------------------
 
@@ -324,14 +390,11 @@ def generate_tsp_art_inside_contours(img, num_points, polygons, darkness_bias=1.
     containing a single long pointless jump connecting them - with the
     point budget split between pieces in proportion to their area.
 
-    Note: as with any straight-line TSP art, a tour edge connects two
-    stipple points directly - for a strongly concave contour this can, on
-    rare occasions, cut across a narrow "waist" of empty space between two
-    points that are otherwise both legitimately inside the shape. This is
-    the standard, accepted behavior of TSP art (true boundary-respecting
-    routing is a much bigger problem - visibility-graph pathfinding rather
-    than a nearest-neighbor/2-opt tour) and is usually a minor effect once
-    the point spacing is small relative to the contour's own features.
+    The tour is split into several strokes wherever one of its edges is a
+    jump rather than part of the drawing - much longer than the local point
+    spacing, or crossing outside the shape (e.g. across a narrow "waist" of
+    a concave contour). Those gaps become pen-up travel moves, so the result
+    is a list of polylines per piece rather than a single one.
     """
     h, w = img.shape[:2]
     if num_points <= 1:
@@ -367,9 +430,14 @@ def generate_tsp_art_inside_contours(img, num_points, polygons, darkness_bias=1.
         if len(points) < 2:
             continue
 
-        polyline = _build_and_improve_tour(points, k_neighbors, opt_passes, piece_seed)
-        if max_edge_len:
-            polyline = subdivide_line(polyline, max_edge_len)
-        polylines.append(polyline)
+        tour = _build_and_improve_tour(points, k_neighbors, opt_passes, piece_seed)
+
+        # Leaps across the canvas / out of the shape must not be drawn: split
+        # the tour there so they become pen-up travel moves.
+        inside_region = prep(piece.buffer(JUMP_INSIDE_TOLERANCE))
+        for stroke in _split_tour_at_jumps(tour, inside_region):
+            if max_edge_len:
+                stroke = subdivide_line(stroke, max_edge_len)
+            polylines.append(stroke)
 
     return polylines
